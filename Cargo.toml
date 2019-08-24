@@ -2,7 +2,7 @@
 name = "nyx"
 version = "0.1.0"
 authors = ["evenorog <evenorog@gmail.com>"]
-description = "Provides utility for finding throughput in bytes per second."
+description = "Provides functions for finding the amount of bytes that are processed per second."
 documentation = "https://docs.rs/nyx"
 repository = "https://github.com/evenorog/nyx"
 readme = "README.md"

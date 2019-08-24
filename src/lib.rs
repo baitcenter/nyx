@@ -1,19 +1,25 @@
 //! Provides utility for finding throughput in bytes per second.
-//!
-//! # Examples
-//! ```
-//! nyx::throughput(0..10_000_000, |bps| { dbg!(bps); });
-//! ```
 
 use std::fmt::{self, Display, Formatter};
 use std::iter::Map;
 use std::mem;
+use std::sync::mpsc::Sender;
 use std::time::Instant;
 
-/// Returns a new iterator that yields a callback of the bytes processed per second from the
-/// given iterator.
+/// Returns an iterator that provides the bytes per second by printing it to `stdout`.
 #[inline]
-pub fn throughput<I, T>(
+pub fn bps_from_iter<I, T>(
+    iter: impl IntoIterator<Item = T, IntoIter = I>,
+) -> Map<I, impl FnMut(T) -> T>
+where
+    I: Iterator<Item = T>,
+{
+    bps_from_iter_with_slot(iter, move |bps| println!("{}", bps))
+}
+
+/// Returns an iterator that provides the bytes per second by calling the provided function.
+#[inline]
+pub fn bps_from_iter_with_slot<I, T>(
     iter: impl IntoIterator<Item = T, IntoIter = I>,
     mut f: impl FnMut(Bps),
 ) -> Map<I, impl FnMut(T) -> T>
@@ -24,17 +30,40 @@ where
     let mut instant = Instant::now();
     iter.into_iter().map(move |item| {
         bytes += mem::size_of_val(&item) as u64;
-        let seconds = instant.elapsed().as_secs();
-        if seconds != 0 {
+        let elapsed = instant.elapsed();
+        if elapsed.as_secs() != 0 {
             instant = Instant::now();
-            f(Bps(bytes / seconds));
+            f(Bps((bytes as f32 / elapsed.as_secs_f32()) as u64));
             bytes = 0;
         }
         item
     })
 }
 
+/// Returns an iterator that provides the bytes per second by sending it through the provided sender.
+#[inline]
+pub fn bps_from_iter_with_sender<I, T>(
+    iter: impl IntoIterator<Item = T, IntoIter = I>,
+    sender: Sender<Bps>,
+) -> Map<I, impl FnMut(T) -> T>
+where
+    I: Iterator<Item = T>,
+{
+    bps_from_iter_with_slot(iter, move |bps| {
+        let _ = sender.send(bps);
+    })
+}
+
 /// Bytes per second.
+///
+/// Provides the expected formatting for displaying bytes per second.
+///
+/// # Examples
+/// ```
+/// # use nyx::Bps;
+/// let bps = Bps(1024);
+/// assert_eq!(bps.to_string(), "1.00 KiB/s");
+/// ```
 #[derive(Copy, Clone, Debug, Default, Hash, Ord, PartialOrd, Eq, PartialEq)]
 pub struct Bps(pub u64);
 

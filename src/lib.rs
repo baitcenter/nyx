@@ -20,6 +20,17 @@
 //! 29.33 GiB/s
 //! ```
 
+#![doc(html_root_url = "https://docs.rs/nyx/latest")]
+#![deny(
+    bad_style,
+    bare_trait_objects,
+    missing_docs,
+    unused_import_braces,
+    unused_qualifications,
+    unsafe_code,
+    unstable_features
+)]
+
 use std::fmt::{self, Display, Formatter};
 use std::time::Instant;
 

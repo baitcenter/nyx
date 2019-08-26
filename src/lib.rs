@@ -1,5 +1,4 @@
-//! Provides functions for finding the amount of bytes that are processed per second
-//! by iterators, readers, and writers.
+//! Provides functionality for finding the throughput of iterators, readers, and writers.
 //!
 //! # Examples
 //!
@@ -74,8 +73,8 @@ impl Display for Bps {
 }
 
 #[inline]
-fn step(new: u64, sum: &mut u64, instant: &mut Instant, mut f: impl FnMut(Bps)) {
-    *sum += new;
+fn bytes_per_second(new: usize, sum: &mut u64, instant: &mut Instant, mut f: impl FnMut(Bps)) {
+    *sum += new as u64;
     let elapsed = instant.elapsed();
     if elapsed.as_secs() != 0 {
         *instant = Instant::now();
@@ -95,47 +94,99 @@ pub mod iter {
     use std::sync::mpsc::Sender;
     use std::time::Instant;
 
-    /// Returns an iterator that provides the bytes per second by printing it to `stdout`.
+    /// Creates an iterator that yields the bytes by printing it to `stdout`.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use std::iter;
+    ///
+    /// fn main() {
+    ///     nyx::iter::stdout(iter::repeat(0)).for_each(|_| ());
+    /// }
+    /// ```
     #[inline]
-    pub fn stdout<I, T>(i: impl IntoIterator<Item = T, IntoIter = I>) -> Map<I, impl FnMut(T) -> T>
+    pub fn stdout<I, T>(
+        iter: impl IntoIterator<Item = T, IntoIter = I>,
+    ) -> Map<I, impl FnMut(T) -> T>
     where
         I: Iterator<Item = T>,
     {
-        slot(i, |bps| println!("{}", bps))
+        slot(iter, |bps| println!("{}", bps))
     }
 
-    /// Returns an iterator that provides the bytes per second by sending it through the provided `Sender`.
+    /// Creates an iterator that yields the bytes by printing it to `stderr`.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use std::iter;
+    ///
+    /// fn main() {
+    ///     nyx::iter::stderr(iter::repeat(0)).for_each(|_| ());
+    /// }
+    /// ```
     #[inline]
-    pub fn sender<I, T>(
-        i: impl IntoIterator<Item = T, IntoIter = I>,
+    pub fn stderr<I, T>(
+        iter: impl IntoIterator<Item = T, IntoIter = I>,
+    ) -> Map<I, impl FnMut(T) -> T>
+    where
+        I: Iterator<Item = T>,
+    {
+        slot(iter, |bps| eprintln!("{}", bps))
+    }
+
+    /// Creates an iterator that yields the bytes by sending it through the provided `Sender`.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use std::sync::mpsc;
+    /// use std::thread;
+    /// use std::iter;
+    ///
+    /// fn main() {
+    ///     let (sender, receiver) = mpsc::channel();
+    ///     thread::spawn(move || {
+    ///         nyx::iter::send(iter::repeat(0), sender).for_each(|_| ());
+    ///     });
+    ///     receiver
+    ///         .iter()
+    ///         .for_each(|bps| println!("B/s from thread: {}", bps));
+    /// }
+    /// ```
+    #[inline]
+    pub fn send<I, T>(
+        iter: impl IntoIterator<Item = T, IntoIter = I>,
         sender: Sender<Bps>,
     ) -> Map<I, impl FnMut(T) -> T>
     where
         I: Iterator<Item = T>,
     {
-        slot(i, move |bps| {
+        slot(iter, move |bps| {
             let _ = sender.send(bps);
         })
     }
 
-    /// Returns an iterator that provides the bytes per second by calling the provided function.
+    /// Creates an iterator that yields the bytes by calling the provided slot.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use std::iter;
+    ///
+    /// fn main() {
+    ///     nyx::iter::slot(iter::repeat(0), |bps| println!("B/s: {}", bps)).for_each(|_| ());
+    /// }
+    /// ```
     #[inline]
     pub fn slot<I, T>(
-        i: impl IntoIterator<Item = T, IntoIter = I>,
-        mut f: impl FnMut(Bps),
+        iter: impl IntoIterator<Item = T, IntoIter = I>,
+        mut slot: impl FnMut(Bps),
     ) -> Map<I, impl FnMut(T) -> T>
     where
         I: Iterator<Item = T>,
     {
         let mut bytes = 0;
         let mut instant = Instant::now();
-        i.into_iter().map(move |item| {
-            crate::step(
-                mem::size_of_val(&item) as u64,
-                &mut bytes,
-                &mut instant,
-                &mut f,
-            );
+        iter.into_iter().map(move |item| {
+            crate::bytes_per_second(mem::size_of_val(&item), &mut bytes, &mut instant, &mut slot);
             item
         })
     }
@@ -157,8 +208,8 @@ pub mod read {
     /// report their throughput every second.
     #[derive(Copy, Clone, Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
     struct Reader<R, F> {
-        r: R,
-        f: F,
+        reader: R,
+        slot: F,
         bytes: u64,
         instant: Instant,
     }
@@ -166,49 +217,97 @@ pub mod read {
     impl<R: Read, F: FnMut(Bps)> Read for Reader<R, F> {
         #[inline]
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            let bytes = self.r.read(buf)?;
-            crate::step(
-                bytes as u64,
-                &mut self.bytes,
-                &mut self.instant,
-                &mut self.f,
-            );
+            let bytes = self.reader.read(buf)?;
+            crate::bytes_per_second(bytes, &mut self.bytes, &mut self.instant, &mut self.slot);
             Ok(bytes)
         }
 
         #[inline]
         fn read_vectored(&mut self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
-            let bytes = self.r.read_vectored(bufs)?;
-            crate::step(
-                bytes as u64,
-                &mut self.bytes,
-                &mut self.instant,
-                &mut self.f,
-            );
+            let bytes = self.reader.read_vectored(bufs)?;
+            crate::bytes_per_second(bytes, &mut self.bytes, &mut self.instant, &mut self.slot);
             Ok(bytes)
         }
     }
 
-    /// Returns a reader that provides the bytes per second by printing it to `stdout`.
+    /// Creates a reader that yields the bytes by printing it to `stdout`.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use std::io;
+    ///
+    /// fn main() {
+    ///     io::copy(&mut nyx::read::stdout(io::repeat(0)), &mut io::sink()).unwrap();
+    /// }
+    /// ```
     #[inline]
-    pub fn stdout(r: impl Read) -> impl Read {
-        slot(r, |bps| println!("{}", bps))
+    pub fn stdout(reader: impl Read) -> impl Read {
+        slot(reader, |bps| println!("{}", bps))
     }
 
-    /// Returns a reader that provides the bytes per second by sending it through the provided `Sender`.
+    /// Creates a reader that yields the bytes by printing it to `stderr`.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use std::io;
+    ///
+    /// fn main() {
+    ///     io::copy(&mut nyx::read::stderr(io::repeat(0)), &mut io::sink()).unwrap();
+    /// }
+    /// ```
     #[inline]
-    pub fn sender(r: impl Read, sender: Sender<Bps>) -> impl Read {
-        slot(r, move |bps| {
+    pub fn stderr(reader: impl Read) -> impl Read {
+        slot(reader, |bps| eprintln!("{}", bps))
+    }
+
+    /// Creates a reader that yields the bytes by sending it through the provided `Sender`.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use std::sync::mpsc;
+    /// use std::thread;
+    /// use std::io;
+    ///
+    /// fn main() {
+    ///     let (sender, receiver) = mpsc::channel();
+    ///     thread::spawn(move || {
+    ///         io::copy(
+    ///             &mut nyx::read::send(io::repeat(0), sender),
+    ///             &mut io::sink(),
+    ///         )
+    ///         .unwrap();
+    ///     });
+    ///     receiver
+    ///         .iter()
+    ///         .for_each(|bps| println!("B/s from thread: {}", bps));
+    /// }
+    /// ```
+    #[inline]
+    pub fn send(reader: impl Read, sender: Sender<Bps>) -> impl Read {
+        slot(reader, move |bps| {
             let _ = sender.send(bps);
         })
     }
 
-    /// Returns a reader that provides the bytes per second by calling the provided function.
+    /// Creates a reader that yields the bytes by calling the provided slot.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use std::io;
+    ///
+    /// fn main() {
+    ///     io::copy(
+    ///         &mut nyx::read::slot(io::repeat(0), |bps| println!("B/s: {}", bps)),
+    ///         &mut io::sink(),
+    ///     )
+    ///     .unwrap();
+    /// }
+    /// ```
     #[inline]
-    pub fn slot(r: impl Read, f: impl FnMut(Bps)) -> impl Read {
+    pub fn slot(reader: impl Read, slot: impl FnMut(Bps)) -> impl Read {
         Reader {
-            r,
-            f,
+            reader,
+            slot,
             bytes: 0,
             instant: Instant::now(),
         }
@@ -231,8 +330,8 @@ pub mod write {
     /// report their throughput every second.
     #[derive(Copy, Clone, Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
     struct Writer<W, F> {
-        w: W,
-        f: F,
+        writer: W,
+        slot: F,
         bytes: u64,
         instant: Instant,
     }
@@ -240,54 +339,102 @@ pub mod write {
     impl<W: Write, F: FnMut(Bps)> Write for Writer<W, F> {
         #[inline]
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            let bytes = self.w.write(buf)?;
-            crate::step(
-                bytes as u64,
-                &mut self.bytes,
-                &mut self.instant,
-                &mut self.f,
-            );
+            let bytes = self.writer.write(buf)?;
+            crate::bytes_per_second(bytes, &mut self.bytes, &mut self.instant, &mut self.slot);
             Ok(bytes)
         }
 
         #[inline]
         fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
-            let bytes = self.w.write_vectored(bufs)?;
-            crate::step(
-                bytes as u64,
-                &mut self.bytes,
-                &mut self.instant,
-                &mut self.f,
-            );
+            let bytes = self.writer.write_vectored(bufs)?;
+            crate::bytes_per_second(bytes, &mut self.bytes, &mut self.instant, &mut self.slot);
             Ok(bytes)
         }
 
         #[inline]
         fn flush(&mut self) -> io::Result<()> {
-            self.w.flush()
+            self.writer.flush()
         }
     }
 
-    /// Returns a writer that provides the bytes per second by printing it to `stdout`.
+    /// Creates a writer that yields the bytes by printing it to `stdout`.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use std::io;
+    ///
+    /// fn main() {
+    ///     io::copy(&mut io::repeat(0), &mut nyx::write::stdout(io::sink())).unwrap();
+    /// }
+    /// ```
     #[inline]
-    pub fn stdout(w: impl Write) -> impl Write {
-        slot(w, |bps| println!("{}", bps))
+    pub fn stdout(writer: impl Write) -> impl Write {
+        slot(writer, |bps| println!("{}", bps))
     }
 
-    /// Returns a writer that provides the bytes per second by sending it through the provided `Sender`.
+    /// Creates a writer that yields the bytes by printing it to `stderr`.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use std::io;
+    ///
+    /// fn main() {
+    ///     io::copy(&mut io::repeat(0), &mut nyx::write::stderr(io::sink())).unwrap();
+    /// }
+    /// ```
     #[inline]
-    pub fn sender(w: impl Write, sender: Sender<Bps>) -> impl Write {
-        slot(w, move |bps| {
+    pub fn stderr(writer: impl Write) -> impl Write {
+        slot(writer, |bps| eprintln!("{}", bps))
+    }
+
+    /// Creates a writer that yields the bytes by sending it through the provided `Sender`.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use std::sync::mpsc;
+    /// use std::thread;
+    /// use std::io;
+    ///
+    /// fn main() {
+    ///     let (sender, receiver) = mpsc::channel();
+    ///     thread::spawn(move || {
+    ///         io::copy(
+    ///             &mut io::repeat(0),
+    ///             &mut nyx::write::send(io::sink(), sender),
+    ///         )
+    ///         .unwrap();
+    ///     });
+    ///     receiver
+    ///         .iter()
+    ///         .for_each(|bps| println!("B/s from thread: {}", bps));
+    /// }
+    /// ```
+    #[inline]
+    pub fn send(writer: impl Write, sender: Sender<Bps>) -> impl Write {
+        slot(writer, move |bps| {
             let _ = sender.send(bps);
         })
     }
 
-    /// Returns a writer that provides the bytes per second by calling the provided function.
+    /// Creates a writer that yields the bytes by calling the provided slot.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use std::io;
+    ///
+    /// fn main() {
+    ///     io::copy(
+    ///         &mut io::repeat(0),
+    ///         &mut nyx::write::slot(io::sink(), |bps| println!("B/s: {}", bps)),
+    ///     )
+    ///     .unwrap();
+    /// }
+    /// ```
     #[inline]
-    pub fn slot(w: impl Write, f: impl FnMut(Bps)) -> impl Write {
+    pub fn slot(writer: impl Write, slot: impl FnMut(Bps)) -> impl Write {
         Writer {
-            w,
-            f,
+            writer,
+            slot,
             bytes: 0,
             instant: Instant::now(),
         }

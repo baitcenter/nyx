@@ -4,8 +4,7 @@
 [![Crates.io](https://img.shields.io/crates/v/nyx.svg)](https://crates.io/crates/nyx)
 [![Docs](https://docs.rs/nyx/badge.svg)](https://docs.rs/nyx)
 
-Provides functions for finding the amount of bytes that are processed per second
-by iterators, readers, and writers.
+Provides functionality for finding the throughput of iterators, readers, and writers.
 
 ## Examples
 

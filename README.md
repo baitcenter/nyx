@@ -9,6 +9,15 @@ by iterators, readers, and writers.
 
 ## Examples
 
+Add this to `Cargo.toml`:
+
+```toml
+[dependencies]
+nyx = "0.1"
+```
+
+And this to `main.rs`:
+
 ```rust
 use std::io;
 
@@ -17,7 +26,7 @@ fn main() {
 }
 ```
 
-Outputs something like this forever:
+This will write the amount of bytes copied per second to `stdout` in one second intervals.
 
 ```
 28.06 GiB/s

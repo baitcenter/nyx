@@ -3,6 +3,15 @@
 //!
 //! # Examples
 //!
+//! Add this to `Cargo.toml`:
+//!
+//! ```toml
+//! [dependencies]
+//! nyx = "0.1"
+//! ```
+//!
+//! And this to `main.rs`:
+//!
 //! ```no_run
 //! use std::io;
 //!
@@ -11,7 +20,7 @@
 //! }
 //! ```
 //!
-//! Outputs something like this forever:
+//! This will write the amount of bytes copied per second to `stdout` in one second intervals.
 //!
 //! ```text
 //! 28.06 GiB/s
@@ -75,7 +84,10 @@ fn step(new: u64, sum: &mut u64, instant: &mut Instant, mut f: impl FnMut(Bps)) 
     }
 }
 
-/// Methods for iterators.
+/// Adapter functions for iterators.
+///
+/// The functions maps the input iterator and extends it with the ability to report their
+/// throughput every second to the specified receiver.
 pub mod iter {
     use crate::Bps;
     use std::iter::Map;
@@ -129,13 +141,20 @@ pub mod iter {
     }
 }
 
-/// Methods for readers.
+/// Adapter functions for readers.
+///
+/// The functions returns a new reader that extends the `read` and `read_vectored`
+/// implementations to be able to report their throughput every second.
+/// If any other methods on the reader has been specialized to not use one of the above methods,
+/// this reader will not report anything.
 pub mod read {
     use crate::Bps;
-    use std::io::{self, Read};
+    use std::io::{self, IoSliceMut, Read};
     use std::sync::mpsc::Sender;
     use std::time::Instant;
 
+    /// A reader that extends the `read` and `read_vectored` implementations to
+    /// report their throughput every second.
     #[derive(Copy, Clone, Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
     struct Reader<R, F> {
         r: R,
@@ -148,6 +167,18 @@ pub mod read {
         #[inline]
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             let bytes = self.r.read(buf)?;
+            crate::step(
+                bytes as u64,
+                &mut self.bytes,
+                &mut self.instant,
+                &mut self.f,
+            );
+            Ok(bytes)
+        }
+
+        #[inline]
+        fn read_vectored(&mut self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
+            let bytes = self.r.read_vectored(bufs)?;
             crate::step(
                 bytes as u64,
                 &mut self.bytes,
@@ -184,13 +215,20 @@ pub mod read {
     }
 }
 
-/// Methods for writers.
+/// Adapter functions for writers.
+///
+/// The functions returns a new writer that extends the `write` and `write_vectored`
+/// implementations to be able to report their throughput every second.
+/// If any other methods on the writer has been specialized to not use one of the above methods,
+/// this writer will not report anything.
 pub mod write {
     use crate::Bps;
-    use std::io::{self, Write};
+    use std::io::{self, IoSlice, Write};
     use std::sync::mpsc::Sender;
     use std::time::Instant;
 
+    /// A writer that extends the `write` and `write_vectored` implementations to be able to
+    /// report their throughput every second.
     #[derive(Copy, Clone, Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
     struct Writer<W, F> {
         w: W,
@@ -203,6 +241,18 @@ pub mod write {
         #[inline]
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             let bytes = self.w.write(buf)?;
+            crate::step(
+                bytes as u64,
+                &mut self.bytes,
+                &mut self.instant,
+                &mut self.f,
+            );
+            Ok(bytes)
+        }
+
+        #[inline]
+        fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+            let bytes = self.w.write_vectored(bufs)?;
             crate::step(
                 bytes as u64,
                 &mut self.bytes,

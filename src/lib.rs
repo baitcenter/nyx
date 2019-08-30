@@ -39,8 +39,25 @@
     unstable_features
 )]
 
+use std::cell::Cell;
 use std::fmt::{self, Display, Formatter};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+thread_local!(static INTERVAL: Cell<Duration> = Cell::new(Duration::from_secs(1)));
+
+/// Gets the update interval for the current thread.
+#[inline]
+pub fn get() -> Duration {
+    INTERVAL.with(Cell::get)
+}
+
+/// Sets the update interval for the current thread.
+///
+/// By default the interval is one second.
+#[inline]
+pub fn set(interval: Duration) {
+    INTERVAL.with(move |c| c.set(interval));
+}
 
 /// Bytes per second with expected formatting.
 ///
@@ -76,7 +93,7 @@ impl Display for Bps {
 fn bytes_per_second(new: usize, sum: &mut u64, instant: &mut Instant, mut f: impl FnMut(Bps)) {
     *sum += new as u64;
     let elapsed = instant.elapsed();
-    if elapsed.as_secs() != 0 {
+    if elapsed >= get() {
         *instant = Instant::now();
         f(Bps((*sum as f64 / elapsed.as_secs_f64()) as u64));
         *sum = 0;
